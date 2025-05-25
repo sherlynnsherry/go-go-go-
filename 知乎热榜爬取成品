@@ -1,0 +1,276 @@
+import tkinter as tk
+from tkinter import ttk, simpledialog, filedialog
+import requests
+import webbrowser
+import jieba
+from collections import Counter
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
+import matplotlib
+import csv
+
+# 设置中文支持
+matplotlib.rcParams['font.sans-serif'] = ['SimHei']
+matplotlib.rcParams['axes.unicode_minus'] = False
+
+# UI样式
+BG_GRADIENT_START = "#e0f7fa"
+BG_GRADIENT_END = "#fff3e0"
+CARD_BG = "#ffffff"
+CARD_BORDER = "#d7ccc8"
+FONT_TITLE = ("微软雅黑", 14, "bold")
+FONT_KEYWORD = ("微软雅黑", 12)
+FONT_BUTTON = ("微软雅黑", 11)
+TITLE_COLOR = "#37474f"
+HOVER_COLOR = "#e64a19"
+BUTTON_COLOR = "#ffab91"
+BUTTON_HOVER_COLOR = "#ff6e40"
+
+hot_titles = []
+word_freq = Counter()
+link_widgets = []
+
+# 创建渐变背景
+def create_gradient(canvas, width, height, start_color, end_color):
+    gradient_id = canvas.create_rectangle(0, 0, width, height, fill=start_color, outline="")
+    canvas.tag_lower(gradient_id)
+    for i in range(0, height, 2):
+        r1, g1, b1 = canvas.winfo_rgb(start_color)
+        r2, g2, b2 = canvas.winfo_rgb(end_color)
+        r = int(r1 + (r2 - r1) * (i / height)) // 256
+        g = int(g1 + (g2 - g1) * (i / height)) // 256
+        b = int(b1 + (b2 - b1) * (i / height)) // 256
+        color = f"#{r:02x}{g:02x}{b:02x}"
+        canvas.create_line(0, i, width, i, fill=color)
+
+def fetch_hot_list():
+    global hot_titles, word_freq
+    url = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=100"
+    headers = {
+        "User-Agent": "...",
+        "cookie":"z_c0="#这两处在知乎网页通过开发者工具获取
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        hot_items = data.get("data", [])
+        hot_titles = []
+        for item in hot_items:
+            title = item["target"]["title"]
+            question_id = item["target"].get("id", "")
+            url = f"https://www.zhihu.com/question/{question_id}"
+            hot_titles.append((title, url))
+        extract_keywords()
+        display_hot_list()
+        show_auto_close_messagebox("提示", "刷新成功")
+    except requests.exceptions.HTTPError as http_err:
+        show_auto_close_messagebox("错误", f"HTTP错误：{http_err}")
+    except Exception as e:
+        show_auto_close_messagebox("错误", f"请求失败：{e}")
+
+def show_auto_close_messagebox(title, message):
+    popup = tk.Toplevel()
+    popup.title(title)
+    popup.geometry("300x100")
+    popup.configure(bg=CARD_BG)
+    label = tk.Label(popup, text=message, font=FONT_BUTTON, bg=CARD_BG, fg=TITLE_COLOR)
+    label.pack(expand=True, fill="both", pady=20)
+    popup.after(1000, popup.destroy)
+    popup.transient(root)
+    popup.grab_set()
+    popup.focus_set()
+
+def extract_keywords():
+    global word_freq
+    text = " ".join([title for title, _ in hot_titles])
+    words = jieba.lcut(text)
+    words = [w for w in words if len(w.strip()) > 1]
+    word_freq = Counter(words)
+
+# 圆角按钮
+class RoundedButton(tk.Canvas):
+    def __init__(self, parent, text, command=None, **kwargs):
+        tk.Canvas.__init__(self, parent, **kwargs)
+        self.command = command
+        self.text = text
+        self.configure(width=90, height=40, highlightthickness=0)
+        self.bg_color = BUTTON_COLOR
+        self.hover_color = BUTTON_HOVER_COLOR
+        self.bind("<Button-1>", self.on_click)
+        self.bind("<Enter>", self.on_hover)
+        self.bind("<Leave>", self.on_leave)
+        self.draw_button()
+
+    def draw_button(self):
+        self.delete("all")
+        self.create_oval(5, 5, 35, 35, fill=self.bg_color, outline="")
+        self.create_oval(55, 5, 85, 35, fill=self.bg_color, outline="")
+        self.create_rectangle(20, 5, 70, 35, fill=self.bg_color, outline="")
+        self.create_text(45, 20, text=self.text, font=FONT_BUTTON, fill="white")
+
+    def on_click(self, event):
+        if self.command:
+            self.command()
+
+    def on_hover(self, event):
+        self.bg_color = self.hover_color
+        self.draw_button()
+
+    def on_leave(self, event):
+        self.bg_color = BUTTON_COLOR
+        self.draw_button()
+
+def show_wordcloud():
+    if not word_freq:
+        show_auto_close_messagebox("提示", "暂无数据生成词云")
+        return
+    wc = WordCloud(font_path="msyh.ttc", background_color="white", width=800, height=400)
+    wc.generate_from_frequencies(word_freq)
+    plt.figure(figsize=(10, 6))
+    plt.imshow(wc, interpolation="bilinear")
+    plt.axis("off")
+    plt.title("知乎热榜词云")
+    plt.show()
+
+def show_bar_chart():
+    if not word_freq:
+        show_auto_close_messagebox("提示", "暂无数据生成柱状图")
+        return
+    keywords, freqs = zip(*word_freq.most_common(10))
+    plt.figure(figsize=(10, 6))
+    plt.bar(keywords, freqs, color="#ff6e40")
+    plt.title("知乎热榜关键词频率")
+    plt.xlabel("关键词")
+    plt.ylabel("频率")
+    plt.xticks(rotation=30)
+    plt.tight_layout()
+    plt.show()
+
+def search_keyword():
+    if not hot_titles:
+        show_auto_close_messagebox("提示", "暂无数据可搜索")
+        return
+    key = simpledialog.askstring("关键词搜索", "请输入关键词：")
+    if not key:
+        return
+    matches = [(title, url) for title, url in hot_titles if key in title]
+    if not matches:
+        show_auto_close_messagebox("搜索结果", f"未找到包含“{key}”的热榜条目。")
+    else:
+        search_win = tk.Toplevel()
+        search_win.title("搜索结果")
+        search_win.configure(bg=CARD_BG)
+        search_win.geometry("800x400")
+
+        # 滚动区域
+        result_canvas = tk.Canvas(search_win, bg=CARD_BG, highlightthickness=0)
+        result_canvas.pack(side="left", fill="both", expand=True)
+
+        v_scrollbar = tk.Scrollbar(search_win, orient="vertical", command=result_canvas.yview)
+        v_scrollbar.pack(side="right", fill="y")
+
+        result_canvas.configure(yscrollcommand=v_scrollbar.set)
+
+        result_frame = tk.Frame(result_canvas, bg=CARD_BG)
+        result_canvas.create_window((0, 0), window=result_frame, anchor="nw")
+
+        def on_frame_configure(event):
+            result_canvas.configure(scrollregion=result_canvas.bbox("all"))
+
+        def on_mousewheel(event):
+            result_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        result_frame.bind("<Configure>", on_frame_configure)
+        search_win.bind_all("<MouseWheel>", on_mousewheel)
+
+        for title, url in matches:
+            link = tk.Label(result_frame, text=title, font=FONT_TITLE, fg=TITLE_COLOR, bg=CARD_BG, cursor="hand2", wraplength=750, justify="left")
+            link.pack(anchor="w", padx=10, pady=5)
+            link.bind("<Button-1>", lambda e, url=url: webbrowser.open(url))
+            link.bind("<Enter>", lambda e, w=link: w.config(fg=HOVER_COLOR))
+            link.bind("<Leave>", lambda e, w=link: w.config(fg=TITLE_COLOR))
+
+def export_hotlist():
+    if not hot_titles:
+        show_auto_close_messagebox("提示", "暂无数据导出")
+        return
+    path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+    if not path:
+        return
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["序号", "标题", "链接"])
+        for idx, (title, url) in enumerate(hot_titles, 1):
+            writer.writerow([idx, title, url])
+    show_auto_close_messagebox("导出成功", f"热榜数据已导出至\n{path}")
+
+def display_hot_list():
+    for widget in result_inner.winfo_children():
+        widget.destroy()
+
+    tk.Label(result_inner, text="知乎热榜：", font=FONT_TITLE, bg=CARD_BG).pack(anchor="w", padx=10, pady=5)
+
+    for idx, (title, url) in enumerate(hot_titles, 1):
+        card = tk.Frame(result_inner, bg=CARD_BG, bd=1, relief="solid")
+        card.pack(anchor="w", fill="x", padx=10, pady=5)
+
+        link = tk.Label(card, text=f"{idx}. {title}", fg=TITLE_COLOR, cursor="hand2", font=FONT_TITLE, bg=CARD_BG, wraplength=1200, justify="left")
+        link.pack(anchor="w", fill="x", padx=10, pady=5)
+        link.bind("<Button-1>", lambda e, url=url: webbrowser.open(url))
+        link.bind("<Enter>", lambda e, w=link: w.config(fg=HOVER_COLOR))
+        link.bind("<Leave>", lambda e, w=link: w.config(fg=TITLE_COLOR))
+
+def refresh_hotlist():
+    fetch_hot_list()
+
+root = tk.Tk()
+root.title("知乎热榜分析")
+root.geometry("900x650")
+root.configure(bg=BG_GRADIENT_START)
+
+# 自动最大化窗口
+try:
+    root.state("zoomed")
+except:
+    root.attributes('-zoomed', True)
+
+canvas_bg = tk.Canvas(root, width=900, height=650)
+canvas_bg.pack(fill="both", expand=True)
+create_gradient(canvas_bg, 900, 650, BG_GRADIENT_START, BG_GRADIENT_END)
+
+btn_frame = tk.Frame(canvas_bg, bg=BG_GRADIENT_START)
+btn_frame.pack(pady=15, fill="x")
+
+RoundedButton(btn_frame, text="刷新热榜", command=refresh_hotlist).pack(side="left", padx=10)
+RoundedButton(btn_frame, text="词云图", command=show_wordcloud).pack(side="left", padx=10)
+RoundedButton(btn_frame, text="柱状图", command=show_bar_chart).pack(side="left", padx=10)
+RoundedButton(btn_frame, text="搜索", command=search_keyword).pack(side="left", padx=10)
+RoundedButton(btn_frame, text="导出热榜", command=export_hotlist).pack(side="left", padx=10)
+
+main_frame = tk.Frame(canvas_bg, bg=BG_GRADIENT_START)
+main_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+result_canvas = tk.Canvas(main_frame, bg=BG_GRADIENT_START, highlightthickness=0)
+result_canvas.pack(side="left", fill="both", expand=True)
+
+v_scrollbar = tk.Scrollbar(main_frame, orient="vertical", command=result_canvas.yview)
+v_scrollbar.pack(side="right", fill="y")
+
+result_canvas.configure(yscrollcommand=v_scrollbar.set)
+
+result_frame = tk.Frame(result_canvas, bg=CARD_BG)
+result_inner = result_frame
+result_canvas.create_window((0, 0), window=result_frame, anchor="nw")
+
+def on_frame_configure(event):
+    result_canvas.configure(scrollregion=result_canvas.bbox("all"))
+
+def on_mousewheel(event):
+    result_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+result_frame.bind("<Configure>", on_frame_configure)
+root.bind_all("<MouseWheel>", on_mousewheel)
+
+fetch_hot_list()
+root.mainloop()
